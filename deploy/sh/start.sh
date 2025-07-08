@@ -23,24 +23,18 @@ fi
 echo "🔍 检查端口占用情况..."
 if command -v netstat &> /dev/null; then
     PORT_5173=$(netstat -tuln 2>/dev/null | grep :5173 | wc -l)
-    PORT_3001=$(netstat -tuln 2>/dev/null | grep :3001 | wc -l)
+    PORT_3000=$(netstat -tuln 2>/dev/null | grep :3000 | wc -l)
     
     if [ "$PORT_5173" -gt 0 ]; then
         echo "⚠️  端口 5173 已被占用，正在尝试关闭..."
-        PID_5173=$(netstat -tuln 2>/dev/null | grep :5173 | awk '{print $7}' | cut -d'/' -f1)
-        if [ ! -z "$PID_5173" ]; then
-            kill -9 $PID_5173 2>/dev/null
-            sleep 2
-        fi
+        fuser -k 5173/tcp 2>/dev/null
+        sleep 2
     fi
     
-    if [ "$PORT_3001" -gt 0 ]; then
-        echo "⚠️  端口 3001 已被占用，正在尝试关闭..."
-        PID_3001=$(netstat -tuln 2>/dev/null | grep :3001 | awk '{print $7}' | cut -d'/' -f1)
-        if [ ! -z "$PID_3001" ]; then
-            kill -9 $PID_3001 2>/dev/null
-            sleep 2
-        fi
+    if [ "$PORT_3000" -gt 0 ]; then
+        echo "⚠️  端口 3000 已被占用，正在尝试关闭..."
+        fuser -k 3000/tcp 2>/dev/null
+        sleep 2
     fi
 fi
 
@@ -48,7 +42,7 @@ fi
 mkdir -p logs
 
 # 启动 SSH 代理服务器
-echo "🔧 启动 SSH 代理服务器..."
+echo "🔧 启动 SSH 代理服务器 (端口 3000)..."
 nohup node src/services/sshProxyServer.cjs > logs/ssh-proxy.log 2>&1 &
 SSH_PID=$!
 echo "✅ SSH 代理服务器已启动 (PID: $SSH_PID)"
@@ -64,9 +58,9 @@ else
     exit 1
 fi
 
-# 启动前端开发服务器
-echo "🌐 启动前端开发服务器..."
-nohup npm run dev > logs/frontend.log 2>&1 &
+# 启动前端开发服务器 (允许外部访问)
+echo "🌐 启动前端开发服务器 (端口 5173)..."
+nohup npm run dev -- --host 0.0.0.0 > logs/frontend.log 2>&1 &
 FRONTEND_PID=$!
 echo "✅ 前端开发服务器已启动 (PID: $FRONTEND_PID)"
 
@@ -89,7 +83,8 @@ echo ""
 echo "🎉 GitAgent 系统启动成功！"
 echo "=========================="
 echo "📱 前端应用: http://localhost:5173"
-echo "🔧 SSH代理服务: http://localhost:3001"
+echo "🔧 SSH代理服务: http://localhost:3000"
+echo "🌐 外部访问: http://$(curl -s ifconfig.me):5173"
 echo ""
 echo "📋 进程信息："
 echo "   SSH代理 PID: $SSH_PID"

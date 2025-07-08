@@ -1,0 +1,5 @@
+---
+description:
+globs:远程服务器 ssh -i C:\AI\productmindai.pem ec2-user@44.203.197.203 "cd /home/gitagent"
+alwaysApply: true
+---

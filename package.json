@@ -8,7 +8,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "ssh-proxy": "node src/services/sshProxyServer.js",
+    "ssh-proxy": "node src/services/sshProxyServer.cjs",
     "dev-with-proxy": "concurrently \"npm run ssh-proxy\" \"npm run dev\""
   },
   "dependencies": {

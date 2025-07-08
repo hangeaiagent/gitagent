@@ -75,11 +75,15 @@ else
     echo "ℹ️  未找到前端开发服务器 PID 文件"
 fi
 
+# 强制清理端口占用
+echo "🔍 强制清理端口占用..."
+fuser -k 5173/tcp 2>/dev/null
+fuser -k 3000/tcp 2>/dev/null
+
 # 检查端口占用情况
-echo "🔍 检查端口占用情况..."
 if command -v netstat &> /dev/null; then
     PORT_5173=$(netstat -tuln 2>/dev/null | grep :5173 | wc -l)
-    PORT_3001=$(netstat -tuln 2>/dev/null | grep :3001 | wc -l)
+    PORT_3000=$(netstat -tuln 2>/dev/null | grep :3000 | wc -l)
     
     if [ "$PORT_5173" -eq 0 ]; then
         echo "✅ 端口 5173 已释放"
@@ -87,12 +91,17 @@ if command -v netstat &> /dev/null; then
         echo "⚠️  端口 5173 仍被占用"
     fi
     
-    if [ "$PORT_3001" -eq 0 ]; then
-        echo "✅ 端口 3001 已释放"
+    if [ "$PORT_3000" -eq 0 ]; then
+        echo "✅ 端口 3000 已释放"
     else
-        echo "⚠️  端口 3001 仍被占用"
+        echo "⚠️  端口 3000 仍被占用"
     fi
 fi
+
+# 清理相关进程
+echo "🧹 清理相关进程..."
+pkill -f "sshProxyServer.cjs" 2>/dev/null
+pkill -f "vite" 2>/dev/null
 
 echo ""
 echo "🎉 GitAgent 系统已停止！"

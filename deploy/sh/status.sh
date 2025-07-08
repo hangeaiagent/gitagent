@@ -77,11 +77,11 @@ if command -v netstat &> /dev/null; then
     fi
     
     echo ""
-    echo "端口 3001 (SSH代理):"
-    PORT_3001_INFO=$(netstat -tuln 2>/dev/null | grep :3001)
-    if [ ! -z "$PORT_3001_INFO" ]; then
+    echo "端口 3000 (SSH代理):"
+    PORT_3000_INFO=$(netstat -tuln 2>/dev/null | grep :3000)
+    if [ ! -z "$PORT_3000_INFO" ]; then
         echo "   ✅ 正在监听"
-        echo "   $PORT_3001_INFO"
+        echo "   $PORT_3000_INFO"
     else
         echo "   ❌ 未监听"
     fi
@@ -112,7 +112,7 @@ fi
 echo ""
 echo "🌐 访问地址:"
 echo "   前端应用: http://localhost:5173"
-echo "   SSH代理服务: http://localhost:3001"
+echo "   SSH代理服务: http://localhost:3000"
 
 echo ""
 echo "📋 可用命令:"
