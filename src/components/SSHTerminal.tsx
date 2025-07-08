@@ -1,12 +1,15 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Terminal, ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { AIAnalystService, AIAnalystContext, DeploymentConfig, DeploymentStep } from '../services/aiAnalystService';
 
 interface SSHTerminalProps {
-  onOutput?: (data: string) => void;
-  onConnect?: () => void;
+  privateKey: string;
+  githubUrl: string;
+  projectType: string;
+  wsUrl: string; // Add wsUrl prop
+  onClose: () => void;
   onError?: (error: string) => void;
 }
 
@@ -462,139 +465,71 @@ const customTheme: ITheme = {
   brightCyan: '#29b8db', brightWhite: '#ffffff'
 };
 
-const SSHTerminal: React.FC = () => {
+const SSHTerminal: React.FC<SSHTerminalProps> = ({ privateKey, githubUrl, projectType, wsUrl, onClose, onError }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
-  const [sshClient, setSSHClient] = useState<EnhancedSSHWebSocketClient | null>(null);
-  const [deploymentManager, setDeploymentManager] = useState<ProactiveDeploymentManager | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
-  
-  const [privateKey, setPrivateKey] = useState('');
-  const [githubUrl, setGithubUrl] = useState('');
-  const [projectType, setProjectType] = useState('react');
-  
+  const fitAddonRef = useRef<FitAddon | null>(null);
+
   useEffect(() => {
-    if (terminalRef.current) {
-      const term = new Terminal({ theme: customTheme, fontSize: 14, convertEol: true });
-      const fitAddon = new FitAddon();
-      term.loadAddon(fitAddon);
-      term.open(terminalRef.current);
-      fitAddon.fit();
+    let client: EnhancedSSHWebSocketClient | null = null;
+    let term: Terminal | null = null;
 
-      const client = new EnhancedSSHWebSocketClient(term);
-      const manager = new ProactiveDeploymentManager(term, client);
-      setSSHClient(client);
-      setDeploymentManager(manager);
+    const setupAndRun = async () => {
+      if (terminalRef.current && privateKey && githubUrl) {
+        // 1. Initialize Terminal
+        term = new Terminal({ theme: customTheme, fontSize: 14, convertEol: true });
+        const fitAddon = new FitAddon();
+        fitAddonRef.current = fitAddon;
+        term.loadAddon(fitAddon);
+        term.open(terminalRef.current);
+        
+        setTimeout(() => fitAddon.fit(), 50);
+        const resizeListener = () => fitAddon.fit();
+        window.addEventListener('resize', resizeListener);
 
-      term.onData((data: string) => client.onData(data));
-      term.onResize(() => fitAddon.fit());
+        // 2. Initialize Client and Manager
+        client = new EnhancedSSHWebSocketClient(term);
+        const manager = new ProactiveDeploymentManager(term, client);
 
-      return () => {
-        client.disconnect();
-        term.dispose();
-      };
-    }
-  }, []);
+        term.onData((data: string) => client?.onData(data));
+        term.focus();
 
-  const handleConnect = async () => {
-    if (sshClient && privateKey) {
-      try {
-        await sshClient.connect(
-          `ws://${window.location.hostname}:3000/ssh`,
-          privateKey,
-          `session-${Date.now()}`
-        );
-        setIsConnected(true);
-      } catch (error) {
-        // error is already written to terminal by the client
-        setIsConnected(false);
+        // 3. Start Automated Workflow
+        try {
+          term.write('🚀 Launching automated deployment agent...\r\n');
+          
+          await client.connect(
+            wsUrl, // Use the wsUrl prop
+            privateKey,
+            `session-${Date.now()}`
+          );
+
+          const deployConfig: DeploymentConfig = { githubUrl, projectType };
+          await manager.startDeployment(deployConfig);
+
+          term.write('\r\n\r\n🎉 Agent has completed its tasks. This window can be closed.\r\n');
+
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          term.write(`\r\n\r\n💥 A critical error occurred: ${errorMessage}\r\n`);
+          onError?.(errorMessage);
+        }
+      } else {
+         console.error("Missing required props for SSHTerminal.");
       }
-    }
-  };
+    };
 
-  const handleStartDeployment = () => {
-    if (deploymentManager && githubUrl) {
-      const config: DeploymentConfig = {
-        githubUrl: githubUrl,
-        projectType: projectType,
-      };
-      deploymentManager.startDeployment(config);
-    }
-  };
+    setupAndRun();
 
-  const controlStyles: React.CSSProperties = {
-    padding: '10px',
-    backgroundColor: '#252526',
-    borderBottom: '1px solid #333',
-    display: 'flex',
-    gap: '20px',
-    alignItems: 'flex-start',
-  };
-
-  const sectionStyles: React.CSSProperties = {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-  };
-
-  const inputStyles: React.CSSProperties = {
-    padding: '8px',
-    border: '1px solid #3c3c3c',
-    backgroundColor: '#3c3c3c',
-    color: '#d4d4d4',
-    borderRadius: '4px',
-    fontFamily: 'monospace',
-  };
-  
-  const buttonStyles: React.CSSProperties = {
-    padding: '8px 15px',
-    border: 'none',
-    backgroundColor: '#0e639c',
-    color: 'white',
-    borderRadius: '4px',
-    cursor: 'pointer',
-    transition: 'background-color 0.2s',
-  };
+    return () => {
+      client?.disconnect();
+      term?.dispose();
+      window.removeEventListener('resize', () => fitAddonRef.current?.fit());
+    };
+    
+  }, [privateKey, githubUrl, projectType, wsUrl, onError]); // Add wsUrl to dependency array
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-      <div style={controlStyles}>
-        <div style={sectionStyles}>
-          <label>SSH Private Key</label>
-          <textarea 
-            value={privateKey}
-            onChange={(e) => setPrivateKey(e.target.value)}
-            placeholder="-----BEGIN RSA PRIVATE KEY-----..."
-            rows={5}
-            style={{...inputStyles, width: '300px'}}
-            disabled={isConnected}
-          />
-          <button onClick={handleConnect} style={buttonStyles} disabled={isConnected}>
-            {isConnected ? 'Connected' : 'Connect'}
-          </button>
-        </div>
-
-        <div style={sectionStyles}>
-          <label>GitHub Repository URL</label>
-          <input 
-            type="text"
-            value={githubUrl}
-            onChange={(e) => setGithubUrl(e.target.value)}
-            placeholder="https://github.com/user/repo.git"
-            style={{...inputStyles, width: '300px'}}
-            disabled={!isConnected}
-          />
-          <label>Project Type</label>
-           <select value={projectType} onChange={(e) => setProjectType(e.target.value)} style={inputStyles} disabled={!isConnected}>
-            <option value="react">React/Vue/Angular</option>
-            <option value="python">Python</option>
-          </select>
-          <button onClick={handleStartDeployment} style={{...buttonStyles, backgroundColor: isConnected ? '#0e639c' : '#555'}} disabled={!isConnected}>
-            Deploy with AI
-          </button>
-        </div>
-      </div>
-      <div ref={terminalRef} style={{ flex: 1, overflow: 'hidden' }} />
-    </div>
+      <div ref={terminalRef} style={{ position:'absolute', top:0, left:0, right:0, bottom:0, height: '100%', width: '100%' }} />
   );
 };
 

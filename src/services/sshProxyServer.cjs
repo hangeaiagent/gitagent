@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
 const crypto = require('crypto');
+const http = require('http');
 
 /**
  * 增强的SSH代理服务器
@@ -14,7 +15,7 @@ class EnhancedSSHProxyServer {
   constructor(port = 3000) {
     this.port = port;
     this.app = express();
-    this.server = null;
+    this.server = http.createServer(this.app); // Create an HTTP server from express app
     this.wss = null;
     this.connections = new Map();
     this.sessions = new Map();
@@ -102,6 +103,11 @@ class EnhancedSSHProxyServer {
       }));
       
       res.json({ connections: connectionList });
+    });
+
+    // New endpoint to get the current WebSocket port
+    this.app.get('/api/ws-port', (req, res) => {
+      res.json({ port: this.port });
     });
 
     // SSH密钥保存API - 增强安全性
@@ -355,21 +361,18 @@ class EnhancedSSHProxyServer {
   }
 
   setupWebSocket() {
-    this.wss = new WebSocket.Server({ 
-      port: this.port + 1,
-      path: '/ssh',
-      verifyClient: (info) => {
-        // 验证客户端
-        const origin = info.origin;
-        const allowedOrigins = [
-          'http://localhost:5173',
-          'http://localhost:3000',
-          'http://127.0.0.1:5173',
-          'http://localhost:8888',
-          'http://localhost:8889'
-        ];
-        
-        return allowedOrigins.includes(origin);
+    this.wss = new WebSocket.Server({ noServer: true }); // Important: noServer mode
+
+    this.server.on('upgrade', (request, socket, head) => {
+      // Authenticate/validate the request before upgrading
+      // For now, we'll just check the path
+      const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
+      if (pathname === '/ssh') {
+        this.wss.handleUpgrade(request, socket, head, (ws) => {
+          this.wss.emit('connection', ws, request);
+        });
+      } else {
+        socket.destroy();
       }
     });
 
@@ -942,22 +945,20 @@ class EnhancedSSHProxyServer {
   }
 
   start() {
-    this.server = this.app.listen(this.port, () => {
-      console.log(`[070902] 🚀 SSH代理服务器启动成功`);
-      console.log(`[070902] 📡 HTTP服务器: http://localhost:${this.port}`);
-      console.log(`[070902] 🔌 WebSocket服务器: ws://localhost:${this.port + 1}/ssh`);
-      console.log(`[070902] 💾 活跃连接数: ${this.connections.size}`);
-    });
-
-    // 优雅关闭
-    process.on('SIGTERM', () => {
-      console.log('[070902] 收到SIGTERM信号，正在关闭服务器...');
-      this.shutdown();
-    });
-
-    process.on('SIGINT', () => {
-      console.log('[070902] 收到SIGINT信号，正在关闭服务器...');
-      this.shutdown();
+    this.server.listen(this.port, () => {
+      console.log(`[070902] ✅ 服务器启动成功，正在监听端口: ${this.port}`);
+      console.log(`[070902] 🔌 WebSocket可在 ws://localhost:${this.port}/ssh 上访问`);
+    }).on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.warn(`[070902] ⚠️ 警告: 端口 ${this.port} 已被占用，正在尝试端口 ${this.port + 1}`);
+        this.port += 1;
+        // The server is not listening, so we need to call listen again
+        // We can just call start() again which handles this.
+        setTimeout(() => this.start(), 100); // Small delay before retry
+      } else {
+        console.error('[070902] 💥 Express服务器启动失败:', err);
+        process.exit(1);
+      }
     });
   }
 
