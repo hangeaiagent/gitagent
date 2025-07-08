@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        import React, { useEffect, useRef } from 'react';
 import { Terminal, Info, CheckCircle, AlertTriangle, XCircle } from 'lucide-react';
 import { DeploymentLog } from '../types/deployment';
 
@@ -60,8 +60,11 @@ const DeploymentLogs: React.FC<DeploymentLogsProps> = ({ logs, isActive }) => {
           </div>
         ) : (
           <div className="space-y-2">
-            {logs.map((log) => (
-              <div key={log.id} className="flex items-start space-x-3">
+            {logs.map((log, index) => (
+              <div
+                key={`${log.id}-${index}`}
+                className="flex items-start space-x-3"
+              >
                 {getLogIcon(log.level)}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center space-x-2">
