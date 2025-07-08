@@ -49,7 +49,7 @@ mkdir -p logs
 
 # 启动 SSH 代理服务器
 echo "🔧 启动 SSH 代理服务器..."
-nohup node src/services/sshProxyServer.js > logs/ssh-proxy.log 2>&1 &
+nohup node src/services/sshProxyServer.cjs > logs/ssh-proxy.log 2>&1 &
 SSH_PID=$!
 echo "✅ SSH 代理服务器已启动 (PID: $SSH_PID)"
 
