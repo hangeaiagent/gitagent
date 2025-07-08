@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { DeploymentConfig, DeploymentStatus, DeploymentLog, UserPrompt, AgentAction } from '../types/deployment';
 import { DeploymentService } from '../services/deploymentService';
+import { EnhancedDeploymentService } from '../services/enhancedDeploymentService';
 
 export const useDeployment = () => {
   const [deploymentStatus, setDeploymentStatus] = useState<DeploymentStatus>({
@@ -10,7 +11,7 @@ export const useDeployment = () => {
     activeAgents: [],
   });
 
-  const [errorAnalysis, setErrorAnalysis] = useState<any>(null);
+  const [errorAnalysis, setErrorAnalysis] = useState<unknown>(null);
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [isAnalyzingError, setIsAnalyzingError] = useState(false);
 
@@ -43,7 +44,7 @@ export const useDeployment = () => {
     }));
   }, []);
 
-  const handleError = useCallback((error: any, analysis?: any) => {
+  const handleError = useCallback((error: unknown, analysis?: unknown) => {
     setIsAnalyzingError(!analysis);
     setErrorAnalysis(analysis);
     setShowErrorModal(true);
@@ -172,6 +173,97 @@ export const useDeployment = () => {
     setErrorAnalysis(null);
   }, []);
 
+  const startRealDeployment = useCallback(async (config: DeploymentConfig) => {
+    if (!config.claudeApiKey) {
+      addLog({
+        id: Date.now().toString(),
+        timestamp: new Date(),
+        level: 'error',
+        message: '❌ 请先配置Claude API Key',
+      });
+      return;
+    }
+
+    setDeploymentStatus({
+      stage: 'connecting',
+      progress: 0,
+      logs: [],
+      activeAgents: [],
+    });
+
+    setShowErrorModal(false);
+    setErrorAnalysis(null);
+
+    try {
+      const enhancedService = new EnhancedDeploymentService(config.claudeApiKey);
+      
+      addLog({
+        id: Date.now().toString(),
+        timestamp: new Date(),
+        level: 'info',
+        message: '🚀 启动真实部署流程',
+        details: `目标: ${config.githubUrl}`,
+      });
+
+      const success = await enhancedService.executeRealDeployment(
+        config,
+        addLog,
+        updateProgress,
+        showUserPrompt,
+        updateAgents,
+        handleError
+      );
+
+      if (success) {
+        const plan = enhancedService.getCurrentPlan();
+        const health = enhancedService.getSystemHealth();
+        
+        setDeploymentStatus(prev => ({
+          ...prev,
+          stage: 'completed',
+          progress: 100,
+          summary: {
+            projectType: 'Real Deployment',
+            deploymentPath: plan?.steps.find(s => s.id === 'prep')?.commands[0] || '/unknown',
+            startCommand: 'pm2 start',
+            accessUrl: `http://${config.serverConfig.host}:3000`,
+            installedPackages: ['nodejs', 'npm', 'pm2'],
+            deploymentTime: Date.now(),
+          },
+        }));
+
+        addLog({
+          id: Date.now().toString(),
+          timestamp: new Date(),
+          level: 'success',
+          message: '🎉 真实部署完成！',
+          details: `服务已在 ${config.serverConfig.host} 上成功启动`,
+        });
+      } else {
+        setDeploymentStatus(prev => ({ 
+          ...prev, 
+          stage: 'failed', 
+          progress: 0 
+        }));
+      }
+
+    } catch (error) {
+      addLog({
+        id: Date.now().toString(),
+        timestamp: new Date(),
+        level: 'error',
+        message: '❌ 真实部署失败',
+        details: error instanceof Error ? error.message : '未知错误',
+      });
+      
+      setDeploymentStatus(prev => ({ 
+        ...prev, 
+        stage: 'failed', 
+        progress: 0 
+      }));
+    }
+  }, [addLog, updateProgress, updateAgents, showUserPrompt, handleError]);
+
   const retryDeployment = useCallback((config: DeploymentConfig) => {
     setShowErrorModal(false);
     startDeployment(config);
@@ -183,6 +275,7 @@ export const useDeployment = () => {
     showErrorModal,
     isAnalyzingError,
     startDeployment,
+    startRealDeployment,
     resetDeployment,
     retryDeployment,
     handleUserResponse,

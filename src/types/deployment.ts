@@ -35,7 +35,7 @@ export interface AgentAction {
   status: 'pending' | 'running' | 'completed' | 'failed' | 'retry';
   retryCount: number;
   maxRetries: number;
-  result?: any;
+  result?: unknown;
   error?: string;
 }
 
@@ -63,4 +63,87 @@ export interface ClaudeResponse {
   requiresUserInput?: boolean;
   userPrompt?: UserPrompt;
   error?: string;
+}
+
+// 新增：真实执行引擎相关类型
+export interface CommandExecution {
+  id: string;
+  command: string;
+  startTime: Date;
+  endTime?: Date;
+  status: 'running' | 'completed' | 'failed' | 'retrying';
+  retries: number;
+  maxRetries: number;
+  result?: CommandResult;
+  error?: string;
+  executionTime?: number;
+}
+
+export interface CommandResult {
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  executionTime: number;
+  command: string;
+}
+
+export interface ExecutionResult {
+  success: boolean;
+  totalCommands: number;
+  successCount: number;
+  failedCount: number;
+  executionTime: number;
+  results: CommandResult[];
+  summary: string;
+}
+
+export interface ErrorPattern {
+  pattern: RegExp;
+  description: string;
+  autoFixable: boolean;
+  fixStrategy?: string;
+}
+
+export interface DeploymentStep {
+  id: string;
+  name: string;
+  description: string;
+  commands: string[];
+  dependencies: string[];
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  result?: ExecutionResult;
+  autoRetry: boolean;
+  critical: boolean;
+}
+
+export interface DeploymentPlan {
+  id: string;
+  name: string;
+  description: string;
+  steps: DeploymentStep[];
+  totalSteps: number;
+  completedSteps: number;
+  currentStep?: string;
+  estimatedTime: number;
+  actualTime?: number;
+}
+
+export interface SystemHealth {
+  cpu: number;
+  memory: number;
+  disk: number;
+  network: boolean;
+  services: ServiceStatus[];
+  timestamp: Date;
+}
+
+export interface ServiceStatus {
+  name: string;
+  status: 'running' | 'stopped' | 'error';
+  pid?: number;
+  port?: number;
+  uptime?: number;
+  memory?: number;
+  cpu?: number;
 }

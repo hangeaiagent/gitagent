@@ -27,7 +27,7 @@ function App() {
   const [showSSHTerminal, setShowSSHTerminal] = useState(false);
   const [sshConnected, setSSHConnected] = useState(false);
   const [sshConfig, setSSHConfig] = useState<SSHConfig | undefined>();
-  const [deploymentMode, setDeploymentMode] = useState<'traditional' | 'ssh'>('traditional');
+  const [deploymentMode, setDeploymentMode] = useState<'traditional' | 'real' | 'ssh'>('traditional');
   
   const { 
     deploymentStatus, 
@@ -35,6 +35,7 @@ function App() {
     showErrorModal,
     isAnalyzingError,
     startDeployment, 
+    startRealDeployment,
     resetDeployment, 
     retryDeployment,
     handleUserResponse,
@@ -59,7 +60,7 @@ function App() {
     }
   };
 
-  // 传统部署方式
+  // 传统部署方式（模拟）
   const handleTraditionalDeploy = async () => {
     if (!githubUrl || !serverConfig.host || !serverConfig.username || !serverConfig.sshKey) {
       alert('请填写所有必要信息');
@@ -78,6 +79,28 @@ function App() {
     };
 
     await startDeployment(config);
+  };
+
+  // 真实部署方式
+  const handleRealDeploy = async () => {
+    if (!githubUrl || !serverConfig.host || !serverConfig.username || !serverConfig.sshKey) {
+      alert('请填写所有必要信息');
+      return;
+    }
+
+    if (!claudeApiKey) {
+      alert('请先配置Claude API Key');
+      return;
+    }
+
+    const config: DeploymentConfig = {
+      githubUrl,
+      serverConfig,
+      claudeApiKey,
+    };
+
+    // 使用真实执行引擎
+    await startRealDeployment(config);
   };
 
   // SSH 终端部署方式
@@ -158,7 +181,7 @@ function App() {
           {/* 部署模式选择 */}
           <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
             <h2 className="text-xl font-semibold text-gray-800 mb-4">部署模式选择</h2>
-            <div className="flex space-x-4">
+            <div className="flex space-x-3">
               <button
                 onClick={() => setDeploymentMode('traditional')}
                 className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-all ${
@@ -168,7 +191,18 @@ function App() {
                 }`}
               >
                 <Bot className="w-4 h-4" />
-                <span>传统智能体模式</span>
+                <span>模拟部署</span>
+              </button>
+              <button
+                onClick={() => setDeploymentMode('real')}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-all ${
+                  deploymentMode === 'real'
+                    ? 'bg-green-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                <Zap className="w-4 h-4" />
+                <span>真实部署</span>
               </button>
               <button
                 onClick={() => setDeploymentMode('ssh')}
@@ -179,12 +213,14 @@ function App() {
                 }`}
               >
                 <TerminalIcon className="w-4 h-4" />
-                <span>SSH终端模式</span>
+                <span>SSH终端</span>
               </button>
             </div>
             <div className="mt-3 text-sm text-gray-600">
               {deploymentMode === 'traditional' 
-                ? '使用多智能体协作进行自动化部署，AI驱动的错误处理'
+                ? '模拟部署流程，显示部署步骤但不执行真实命令'
+                : deploymentMode === 'real'
+                ? '⚡ 真实执行部署命令，自动修复错误，迭代优化部署流程'
                 : '直接在浏览器中使用SSH终端，私钥本地处理，更安全的部署方式'
               }
             </div>
@@ -279,9 +315,26 @@ function App() {
                       {isDeploying ? (
                         <RefreshCw className="w-4 h-4 animate-spin" />
                       ) : (
+                        <Bot className="w-4 h-4" />
+                      )}
+                      <span>{isDeploying ? '部署中...' : '模拟部署'}</span>
+                    </button>
+                  ) : deploymentMode === 'real' ? (
+                    <button
+                      onClick={handleRealDeploy}
+                      disabled={isDeploying || !claudeApiKey}
+                      className={`flex-1 flex items-center justify-center space-x-2 px-4 py-3 rounded-lg font-medium transition-all ${
+                        isDeploying || !claudeApiKey
+                          ? 'bg-gray-400 cursor-not-allowed text-white'
+                          : 'bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white shadow-lg hover:shadow-xl'
+                      }`}
+                    >
+                      {isDeploying ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
                         <Zap className="w-4 h-4" />
                       )}
-                      <span>{isDeploying ? '部署中...' : '开始智能部署'}</span>
+                      <span>{isDeploying ? '真实部署中...' : '开始真实部署'}</span>
                     </button>
                   ) : (
                     <button
