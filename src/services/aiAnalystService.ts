@@ -1,3 +1,14 @@
+import { Terminal } from '@xterm/xterm';
+
+export interface DeploymentStep {
+  id: string;
+  command: string;
+  description: string;
+  timeout?: number;
+  retryCount?: number;
+  successPattern?: string;
+}
+
 export interface AIAnalystContext {
   failedCommand: string;
   stdout: string;
@@ -11,13 +22,62 @@ export interface AIFixSuggestion {
   explanation: string;
 }
 
+export interface DeploymentConfig {
+  githubUrl: string;
+  projectType: string;
+  deploymentPath?: string;
+}
+
 /**
  * AI Analyst Service
  * This service is responsible for interacting with a Large Language Model (LLM)
- * to get suggestions for fixing deployment errors.
+ * to get suggestions for fixing deployment errors and generating deployment plans.
  */
 export class AIAnalystService {
-  
+  private terminal: Terminal;
+
+  constructor(terminal: Terminal) {
+    this.terminal = terminal;
+  }
+
+  /**
+   * Generates a deployment plan by analyzing the project.
+   * 
+   * @param config The deployment configuration containing the GitHub URL and project type.
+   * @returns A promise that resolves to an array of deployment steps.
+   */
+  async generateDeploymentPlan(config: DeploymentConfig): Promise<DeploymentStep[]> {
+    this.logToTerminal(`\r\n🤔 AI is analyzing the project: ${config.githubUrl}`);
+    this.logToTerminal(`   - Project Type: ${config.projectType}`);
+
+    // --- REAL IMPLEMENTATION ---
+    // Here, you would call an LLM with a prompt asking it to generate a JSON array
+    // of deployment steps based on the project's characteristics. You might analyze
+    // package.json, requirements.txt, etc., to provide more context.
+    //
+    // const prompt = this.constructPlanPrompt(config);
+    // const aiResponse = await this.callClaudeAPI(prompt); 
+    // return this.parsePlanResponse(aiResponse);
+    // -------------------------
+
+    // --- MOCK IMPLEMENTATION ---
+    await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate analysis delay
+    this.logToTerminal('   - Analysis complete. Generating deployment plan...');
+    
+    const projectName = config.githubUrl.substring(config.githubUrl.lastIndexOf('/') + 1).replace('.git', '');
+    const deploymentPath = config.deploymentPath || `~/deployments/${projectName}`;
+
+    const baseSteps: DeploymentStep[] = [
+      { id: 'clone_repo', command: `git clone ${config.githubUrl} ${deploymentPath}`, description: 'Clone repository from GitHub' },
+      { id: 'navigate_to_dir', command: `cd ${deploymentPath}`, description: 'Navigate into project directory' },
+    ];
+    
+    const projectSpecificSteps = this.getMockProjectSteps(config.projectType);
+
+    this.logToTerminal('   - AI has generated the following plan.');
+    return [...baseSteps, ...projectSpecificSteps];
+  }
+
   /**
    * Gets a fix suggestion from an AI model.
    * 
@@ -25,39 +85,45 @@ export class AIAnalystService {
    * @returns A promise that resolves to a fix suggestion.
    */
   async getFixSuggestion(context: AIAnalystContext): Promise<AIFixSuggestion> {
-    this.logToTerminal(`\n🤔 Analyzing error for command: ${context.failedCommand}`);
+    this.logToTerminal(`\r\n🤔 AI is analyzing an error for command: ${context.failedCommand}`);
     this.logToTerminal(`   - Stderr: ${context.stderr.substring(0, 100)}...`);
 
-    // --- REAL IMPLEMENTATION ---
-    // In a real-world scenario, you would make an API call to an LLM like Claude here.
-    // You would need to:
-    // 1. Get an API key for the service.
-    // 2. Use an HTTP client (like fetch or axios) to make a POST request.
-    // 3. Construct a detailed prompt with the context.
-    // 4. Parse the JSON response to extract the suggested command and explanation.
-    //
-    // const prompt = this.constructPrompt(context);
-    // const response = await fetch('https://api.anthropic.com/v1/messages', {
-    //   method: 'POST',
-    //   headers: {
-    //     'x-api-key': 'YOUR_CLAUDE_API_KEY',
-    //     'Content-Type': 'application/json',
-    //     'anthropic-version': '2023-06-01'
-    //   },
-    //   body: JSON.stringify({
-    //     model: "claude-3-sonnet-20240229",
-    //     max_tokens: 1024,
-    //     messages: [{ role: 'user', content: prompt }]
-    //   })
-    // });
-    // const data = await response.json();
-    // return this.parseAIResponse(data.content[0].text);
+    // --- REAL IMPLEMENTATION (as described before) ---
+    // const prompt = this.constructFixPrompt(context);
+    // ... call LLM API ...
+    // return this.parseFixResponse(aiResponse);
     // -------------------------
 
     // --- MOCK IMPLEMENTATION ---
-    // For now, we simulate the AI's response with a delay and pre-canned answers.
     await new Promise(resolve => setTimeout(resolve, 2000)); // Simulate network delay
     return this.getMockSuggestion(context);
+  }
+
+  /**
+   * Mocks a project-specific deployment plan.
+   */
+  private getMockProjectSteps(projectType: string): DeploymentStep[] {
+    switch (projectType.toLowerCase()) {
+      case 'react':
+      case 'vue':
+      case 'angular':
+        return [
+          { id: 'install_deps', command: 'npm install', description: 'Install Node.js dependencies' },
+          { id: 'build_project', command: 'npm run build', description: 'Build the frontend application' },
+          { id: 'setup_pm2', command: 'npm install -g pm2', description: 'Ensure PM2 is installed globally' },
+          { id: 'start_service', command: 'pm2 serve build 3000 --spa --name gitagent-app --delete-old-pm2', description: 'Serve the build folder with PM2' }
+        ];
+      case 'python':
+        return [
+          { id: 'create_venv', command: 'python3 -m venv venv', description: 'Create a Python virtual environment' },
+          { id: 'activate_venv', command: 'source venv/bin/activate', description: 'Activate the virtual environment' },
+          { id: 'install_deps', command: 'pip install -r requirements.txt', description: 'Install Python dependencies' },
+          { id: 'start_gunicorn', command: 'gunicorn app:app -b 0.0.0.0:8000', description: 'Start the application with Gunicorn' }
+        ];
+      default:
+        this.logToTerminal(`\r\n⚠️ No specific plan available for project type '${projectType}'. Using a generic plan.`);
+        return [];
+    }
   }
 
   /**
@@ -109,9 +175,9 @@ export class AIAnalystService {
   }
 
   /**
-   * Constructs a detailed prompt for the LLM.
+   * Constructs a detailed prompt for the LLM to get a FIX.
    */
-  private constructPrompt(context: AIAnalystContext): string {
+  private constructFixPrompt(context: AIAnalystContext): string {
     return `
       You are an expert system administrator and DevOps engineer. You are assisting in an automated deployment script.
       A command has failed. Please provide a single shell command to fix the issue.
@@ -138,9 +204,27 @@ export class AIAnalystService {
   }
 
   /**
-   * Parses the JSON response from the LLM.
+   * Constructs a detailed prompt for the LLM to get a DEPLOYMENT PLAN.
    */
-  private parseAIResponse(responseText: string): AIFixSuggestion {
+  private constructPlanPrompt(config: DeploymentConfig): string {
+     return `
+      You are an expert system administrator and DevOps engineer. Your task is to create a deployment plan for a project.
+      Analyze the project details and return a JSON array of deployment steps. Each step should be an object with "id", "command", and "description" keys.
+      The plan should be robust and follow best practices.
+
+      Here is the project information:
+      - GitHub URL: ${config.githubUrl}
+      - Declared Project Type: ${config.projectType}
+      - Target Deployment Path: ${config.deploymentPath || '~/deployments/'}
+
+      Please provide the deployment plan as a JSON array.
+     `;
+  }
+
+  /**
+   * Parses the JSON response from the LLM for a FIX.
+   */
+  private parseFixResponse(responseText: string): AIFixSuggestion {
     try {
         const jsonResponse = JSON.parse(responseText);
         return {
@@ -156,10 +240,24 @@ export class AIAnalystService {
         };
     }
   }
+  
+  /**
+   * Parses the JSON response from the LLM for a PLAN.
+   */
+  private parsePlanResponse(responseText: string): DeploymentStep[] {
+      try {
+          // The AI should return a direct JSON array of steps
+          return JSON.parse(responseText);
+      } catch (error) {
+          console.error("Failed to parse AI plan response:", error);
+          this.logToTerminal("\r\n❌ Error: The AI returned an invalid deployment plan. Aborting.");
+          return []; // Return an empty plan to gracefully fail
+      }
+  }
 
-  // This is a dummy log function. In a real implementation, this would
-  // be a callback to the terminal UI.
   private logToTerminal(message: string) {
-    console.log(`[AI Analyst] ${message}`);
+    // Replace newline characters with carriage return + newline for proper terminal display
+    const formattedMessage = message.replace(/\n/g, '\r\n');
+    this.terminal.write(formattedMessage);
   }
 } 
