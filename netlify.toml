@@ -1,0 +1,19 @@
+[dev]
+  # 我们告诉Netlify Dev，它应该在端口8889上运行
+  # 这将避免与其他程序占用8888端口的冲突
+  port = 8889
+  # 我们告诉Netlify Dev，底层的Vite框架正在端口5173上运行
+  targetPort = 5173
+  # 自动启动Vite
+  command = "vite"
+
+# 下面是关键的代理规则
+[[redirects]]
+  # 所有从/api/开始的路径...
+  from = "/api/*"
+  # ...都将被转发到您的EC2服务器的对应路径
+  to = "http://44.203.197.203/api/:splat"
+  # 状态码200表示这是一个代理，而不是一个永久重定向
+  status = 200
+  # 强制执行此规则，即使路径下存在同名文件
+  force = true 

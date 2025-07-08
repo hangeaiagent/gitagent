@@ -2,7 +2,7 @@ import React from 'react';
 import { Server, Download, Settings, TestTube, CheckCircle, AlertCircle } from 'lucide-react';
 
 interface DeploymentProgressProps {
-  stage: 'idle' | 'connecting' | 'analyzing' | 'downloading' | 'installing' | 'testing' | 'completed' | 'failed';
+  stage: 'idle' | 'connecting' | 'analyzing' | 'downloading' | 'installing' | 'testing' | 'completed' | 'failed' | 'waiting-input';
   progress: number;
 }
 
@@ -26,6 +26,7 @@ const DeploymentProgress: React.FC<DeploymentProgressProps> = ({ stage, progress
     
     if (stageIndex < currentIndex) return 'completed';
     if (stageIndex === currentIndex) return 'active';
+    if (stage === 'waiting-input' && stageIndex === currentIndex -1) return 'completed';
     return 'pending';
   };
 
@@ -34,6 +35,7 @@ const DeploymentProgress: React.FC<DeploymentProgressProps> = ({ stage, progress
       case 'completed':
         return 'text-green-600 bg-green-100';
       case 'active':
+      case 'waiting-input':
         return 'text-blue-600 bg-blue-100';
       case 'failed':
         return 'text-red-600 bg-red-100';

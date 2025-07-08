@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AlertTriangle, Brain, Lightbulb, Settings, Clock, X, RefreshCw } from 'lucide-react';
 
-interface ErrorAnalysis {
+export interface ErrorAnalysis {
   errorType: string;
   rootCause: string;
   severity: 'low' | 'medium' | 'high' | 'critical';

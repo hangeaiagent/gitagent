@@ -7,7 +7,7 @@ import DeploymentSummary from './components/DeploymentSummary';
 import ClaudeConfig from './components/ClaudeConfig';
 import AgentStatus from './components/AgentStatus';
 import UserPromptModal from './components/UserPromptModal';
-import ErrorAnalysisModal from './components/ErrorAnalysisModal';
+import ErrorAnalysisModal, { ErrorAnalysis } from './components/ErrorAnalysisModal';
 import SSHTerminal from './components/SSHTerminal';
 import LogViewer from './components/LogViewer';
 import { useDeployment } from './hooks/useDeployment';
@@ -15,12 +15,12 @@ import { DeploymentConfig, ServerConfig } from './types/deployment';
 import type { SSHConfig } from './components/SSHTerminal';
 
 function App() {
-  const [githubUrl, setGithubUrl] = useState('');
+  const [githubUrl, setGithubUrl] = useState('https://github.com/hangeaiagent/scira');
   const [claudeApiKey, setClaudeApiKey] = useState('');
   const [serverConfig, setServerConfig] = useState<ServerConfig>({
-    host: '',
+    host: '44.203.197.203',
     port: 22,
-    username: '',
+    username: 'ec2-user',
     sshKey: null,
   });
   
@@ -28,7 +28,7 @@ function App() {
   const [showSSHTerminal, setShowSSHTerminal] = useState(false);
   const [sshConnected, setSSHConnected] = useState(false);
   const [sshConfig, setSSHConfig] = useState<SSHConfig | undefined>();
-  const [deploymentMode, setDeploymentMode] = useState<'traditional' | 'real' | 'ssh'>('traditional');
+  const [deploymentMode, setDeploymentMode] = useState<'traditional' | 'real' | 'ssh'>('real');
   
   const { 
     deploymentStatus, 
@@ -137,8 +137,6 @@ function App() {
   const isDeploying = deploymentStatus.stage !== 'idle' && 
                      deploymentStatus.stage !== 'completed' && 
                      deploymentStatus.stage !== 'failed';
-
-  const isWaitingInput = deploymentStatus.stage === 'waiting-input';
 
   // SSH 连接状态处理
   const handleSSHConnect = (connected: boolean) => {
@@ -304,16 +302,16 @@ function App() {
                 
                 <div className="mt-6 flex space-x-3">
                   {deploymentMode === 'traditional' ? (
-                    <button
+                  <button
                       onClick={handleTraditionalDeploy}
-                      disabled={isDeploying || !claudeApiKey}
-                      className={`flex-1 flex items-center justify-center space-x-2 px-4 py-3 rounded-lg font-medium transition-all ${
-                        isDeploying || !claudeApiKey
-                          ? 'bg-gray-400 cursor-not-allowed text-white'
-                          : 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white shadow-lg hover:shadow-xl'
-                      }`}
-                    >
-                      {isDeploying ? (
+                    disabled={isDeploying || !claudeApiKey}
+                    className={`flex-1 flex items-center justify-center space-x-2 px-4 py-3 rounded-lg font-medium transition-all ${
+                      isDeploying || !claudeApiKey
+                        ? 'bg-gray-400 cursor-not-allowed text-white'
+                        : 'bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white shadow-lg hover:shadow-xl'
+                    }`}
+                  >
+                    {isDeploying ? (
                         <RefreshCw className="w-4 h-4 animate-spin" />
                       ) : (
                         <Bot className="w-4 h-4" />
@@ -349,7 +347,7 @@ function App() {
                     >
                       <TerminalIcon className="w-4 h-4" />
                       <span>打开SSH终端</span>
-                    </button>
+                  </button>
                   )}
                   
                   {(deploymentStatus.stage !== 'idle') && (
@@ -419,26 +417,29 @@ function App() {
               {/* Traditional Deployment UI */}
               {deploymentMode === 'traditional' && (
                 <>
-                  <DeploymentProgress 
-                    status={deploymentStatus}
-                    onRetry={handleRetryDeployment}
-                    onReset={resetDeployment}
-                  />
+                  {/* 部署流程可视化 */}
+                  <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+                <DeploymentProgress
+                  stage={deploymentStatus.stage}
+                  progress={deploymentStatus.progress}
+                />
+            </div>
 
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <AgentStatus 
-                      agents={deploymentStatus.activeAgents}
-                      currentAgent={deploymentStatus.currentAgent}
-                    />
-                    
-                    <DeploymentLogs logs={deploymentStatus.logs} />
-                  </div>
+              <AgentStatus
+                agents={deploymentStatus.activeAgents}
+                currentAgent={deploymentStatus.currentAgent}
+              />
 
-                  {deploymentStatus.summary && (
+                <DeploymentLogs
+                  logs={deploymentStatus.logs}
+                      isActive={deploymentStatus.stage !== 'idle' && deploymentStatus.stage !== 'completed' && deploymentStatus.stage !== 'failed'}
+                />
+              </div>
+              
+              {deploymentStatus.summary && (
                     <DeploymentSummary 
                       summary={deploymentStatus.summary}
-                      onViewLogs={() => {}}
-                      onDeployAgain={handleTraditionalDeploy}
                     />
                   )}
                 </>
@@ -447,11 +448,13 @@ function App() {
               {/* Real Deployment UI */}
               {deploymentMode === 'real' && (
                 <>
-                  <DeploymentProgress 
-                    status={deploymentStatus}
-                    onRetry={handleRetryDeployment}
-                    onReset={resetDeployment}
-                  />
+                  {/* 部署流程可视化 */}
+                  <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+                    <DeploymentProgress 
+                      stage={deploymentStatus.stage} 
+                      progress={deploymentStatus.progress} 
+                    />
+                  </div>
 
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <AgentStatus 
@@ -459,7 +462,10 @@ function App() {
                       currentAgent={deploymentStatus.currentAgent}
                     />
                     
-                    <DeploymentLogs logs={deploymentStatus.logs} />
+                    <DeploymentLogs 
+                      logs={deploymentStatus.logs} 
+                      isActive={deploymentStatus.stage !== 'idle' && deploymentStatus.stage !== 'completed' && deploymentStatus.stage !== 'failed'}
+                    />
                   </div>
 
                   {/* Enhanced Log Viewer for Real Deployment */}
@@ -472,8 +478,6 @@ function App() {
                   {deploymentStatus.summary && (
                     <DeploymentSummary 
                       summary={deploymentStatus.summary}
-                      onViewLogs={() => {}}
-                      onDeployAgain={handleRealDeploy}
                     />
                   )}
                 </>
@@ -511,28 +515,27 @@ function App() {
                   </div>
                 </div>
               )}
-            </div>
-          </div>
+        </div>
+      </div>
 
-          {/* User Prompt Modal */}
-          {isWaitingInput && deploymentStatus.userPrompt && (
-            <UserPromptModal
-              prompt={deploymentStatus.userPrompt}
-              onResponse={handleUserResponse}
-              onCancel={() => resetDeployment()}
-              isOpen={isWaitingInput}
+          {/* 交互式用户输入 */}
+          {deploymentStatus.stage === 'waiting-input' && deploymentStatus.userPrompt && (
+        <UserPromptModal
+          prompt={deploymentStatus.userPrompt}
+          onResponse={handleUserResponse}
+              onCancel={() => handleUserResponse('cancel')}
             />
           )}
 
-          {/* Error Analysis Modal */}
-          <ErrorAnalysisModal
-            error={deploymentStatus.stage === 'failed' ? deploymentStatus.logs.find(log => log.level === 'error') : null}
-            analysis={errorAnalysis}
-            isOpen={showErrorModal}
-            isAnalyzing={isAnalyzingError}
-            onClose={() => setShowErrorModal(false)}
-            onRetry={handleRetryDeployment}
-            onUserResponse={handleUserResponse}
+          {/* 错误分析模态框 */}
+      <ErrorAnalysisModal
+        isOpen={showErrorModal}
+            error={deploymentStatus.logs.find(log => log.level === 'error')?.message || '未知错误'}
+            analysis={errorAnalysis ? errorAnalysis as ErrorAnalysis : undefined}
+        isAnalyzing={isAnalyzingError}
+        onClose={() => setShowErrorModal(false)}
+        onRetry={handleRetryDeployment}
+            context={{}} 
           />
         </div>
       </div>

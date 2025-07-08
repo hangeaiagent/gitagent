@@ -1,26 +1,13 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Terminal } from '@xterm/xterm';
+import React, { useEffect, useRef, useState } from 'react';
+import { Terminal, ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { WebLinksAddon } from '@xterm/addon-web-links';
-import { SearchAddon } from '@xterm/addon-search';
-import { ClipboardAddon } from '@xterm/addon-clipboard';
-import { WebglAddon } from '@xterm/addon-webgl';
-import { AttachAddon } from '@xterm/addon-attach';
 import '@xterm/xterm/css/xterm.css';
-
-interface SSHConfig {
-  host: string;
-  port: number;
-  username: string;
-  privateKey: string;
-}
+import { AIAnalystService, AIAnalystContext } from '../services/aiAnalystService';
 
 interface SSHTerminalProps {
-  sshConfig?: SSHConfig;
-  onConnect?: (connected: boolean) => void;
-  onError?: (error: string) => void;
   onOutput?: (data: string) => void;
-  className?: string;
+  onConnect?: () => void;
+  onError?: (error: string) => void;
 }
 
 interface DeploymentStep {
@@ -29,563 +16,675 @@ interface DeploymentStep {
   description: string;
   timeout?: number;
   retryCount?: number;
+  successPattern?: string;
 }
 
-class SSHWebSocketClient {
-  private websocket: WebSocket | null = null;
-  private terminal: Terminal;
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
-  private onConnectCallback?: (connected: boolean) => void;
-  private onErrorCallback?: (error: string) => void;
+interface DeploymentConfig {
+  githubUrl: string;
+  projectType: string;
+  deploymentPath?: string;
+}
 
-  constructor(terminal: Terminal) {
-    this.terminal = terminal;
-  }
-
-  connect(config: SSHConfig, onConnect?: (connected: boolean) => void, onError?: (error: string) => void): Promise<void> {
-    this.onConnectCallback = onConnect;
-    this.onErrorCallback = onError;
-
-    return new Promise((resolve, reject) => {
-      try {
-        // 连接到本地 SSH 代理服务
-        const wsUrl = `ws://localhost:3000/ssh`;
-        this.websocket = new WebSocket(wsUrl);
-
-        this.websocket.onopen = () => {
-          this.terminal.write('\r\n🔗 正在连接到服务器...\r\n');
-          
-          // 发送 SSH 连接配置
-          this.websocket?.send(JSON.stringify({
-            type: 'connect',
-            config: {
-              host: config.host,
-              port: config.port,
-              username: config.username,
-              privateKey: config.privateKey
-            }
-          }));
+class EnhancedSSHWebSocketClient {
+    private ws: WebSocket | null = null;
+    private terminal: Terminal;
+    private isConnected = false;
+    private reconnectAttempts = 0;
+    private maxReconnectAttempts = 5;
+    private heartbeatInterval: number | null = null;
+    private manualDisconnect = false;
+    private sessionId: string | null = null;
+    private messageQueue: string[] = [];
+  
+    constructor(terminal: Terminal) {
+      this.terminal = terminal;
+    }
+  
+    onData(data: string) {
+      this.send({ type: 'data', data });
+    }
+  
+    onResize(size: { cols: number, rows: number }) {
+      this.send({ type: 'resize', ...size });
+    }
+  
+    async connect(url: string, privateKey: string, sessionId: string): Promise<void> {
+      return new Promise((resolve, reject) => {
+        this.manualDisconnect = false;
+        this.ws = new WebSocket(url);
+  
+        this.ws.onopen = () => {
+          console.log('🔌 WebSocket 连接已建立');
+          this.terminal.write('🔌 WebSocket 连接已建立\r\n');
+          this.isConnected = true;
+          this.sessionId = sessionId;
+          this.sendHello(privateKey, sessionId);
+          this.startHeartbeat();
+          this.processMessageQueue();
+          resolve();
         };
-
-        this.websocket.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            this.handleMessage(data);
-            
-            if (data.type === 'connected') {
-              this.reconnectAttempts = 0;
-              this.onConnectCallback?.(true);
-              resolve();
-            } else if (data.type === 'error') {
-              this.onErrorCallback?.(data.message);
-              reject(new Error(data.message));
-            }
-          } catch (error) {
-            console.error('Failed to parse WebSocket message:', error);
+  
+        this.ws.onclose = (event) => {
+          console.log(`🔌 WebSocket 连接已关闭: ${event.reason} (${event.code})`);
+          this.terminal.write(`\r\n🔌 WebSocket 连接已关闭: ${event.reason}\r\n`);
+          this.isConnected = false;
+          this.stopHeartbeat();
+          if (!this.manualDisconnect) {
+            this.reconnect(url, privateKey, sessionId);
           }
         };
-
-        this.websocket.onclose = () => {
-          this.terminal.write('\r\n❌ 连接已断开\r\n');
-          this.onConnectCallback?.(false);
-          this.attemptReconnect(config);
+  
+        this.ws.onerror = (event) => {
+          console.error('🔌 WebSocket 错误:', event);
+          this.terminal.write('\r\n🔌 WebSocket 连接错误\r\n');
+          this.isConnected = false;
+          reject(new Error('WebSocket 连接失败'));
         };
-
-        this.websocket.onerror = (error) => {
-          console.error('WebSocket error:', error);
-          this.onErrorCallback?.('WebSocket连接错误');
-          reject(error);
-        };
-
-        // 监听终端输入
-        this.terminal.onData((data) => {
-          if (this.websocket?.readyState === WebSocket.OPEN) {
-            this.websocket.send(JSON.stringify({
-              type: 'input',
-              data
-            }));
+  
+        this.ws.onmessage = (event) => {
+          const message = JSON.parse(event.data);
+          if (message.type === 'data') {
+            this.terminal.write(message.data);
+          } else if (message.type === 'heartbeat' && message.status === 'pong') {
+            // Heartbeat response
           }
-        });
-
-      } catch (error) {
-        reject(error);
-      }
-    });
-  }
-
-  private handleMessage(data: any) {
-    switch (data.type) {
-      case 'data':
-        this.terminal.write(data.content);
-        break;
-      case 'connected':
-        this.terminal.write('\r\n✅ SSH 连接成功!\r\n');
-        break;
-      case 'error':
-        this.terminal.write(`\r\n❌ 错误: ${data.message}\r\n`);
-        break;
-      case 'disconnected':
-        this.terminal.write('\r\n🔌 SSH 连接已断开\r\n');
-        break;
+        };
+      });
     }
-  }
-
-  private attemptReconnect(config: SSHConfig) {
-    if (this.reconnectAttempts < this.maxReconnectAttempts) {
-      this.reconnectAttempts++;
-      this.terminal.write(`\r\n🔄 尝试重连 (${this.reconnectAttempts}/${this.maxReconnectAttempts})...\r\n`);
-      
-      setTimeout(() => {
-        this.connect(config, this.onConnectCallback, this.onErrorCallback);
-      }, 2000 * this.reconnectAttempts);
-    } else {
-      this.terminal.write('\r\n❌ 重连失败，已达到最大重试次数\r\n');
-    }
-  }
-
-  executeCommand(command: string): Promise<{ output: string; exitCode: number }> {
-    return new Promise((resolve, reject) => {
-      if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
-        reject(new Error('SSH 连接未建立'));
+  
+    reconnect(url: string, privateKey: string, sessionId: string) {
+      if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+        this.terminal.write('\r\n🔌 达到最大重连次数，已放弃。\r\n');
         return;
       }
-
-      const commandId = Date.now().toString();
-      let output = '';
-      
-      const messageHandler = (event: MessageEvent) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.commandId === commandId) {
-            if (data.type === 'command_output') {
-              output += data.content;
-            } else if (data.type === 'command_complete') {
-              this.websocket?.removeEventListener('message', messageHandler);
-              resolve({ output, exitCode: data.exitCode });
-            } else if (data.type === 'command_error') {
-              this.websocket?.removeEventListener('message', messageHandler);
-              reject(new Error(data.message));
+      const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+      this.reconnectAttempts++;
+      this.terminal.write(`\r\n🔌 ${delay / 1000}秒后尝试重新连接... (第${this.reconnectAttempts}次)\r\n`);
+  
+      setTimeout(() => {
+        this.connect(url, privateKey, sessionId).catch(() => {
+          // connect will call reconnect on its own on failure
+        });
+      }, delay);
+    }
+  
+    disconnect() {
+      this.manualDisconnect = true;
+      this.stopHeartbeat();
+      this.ws?.close();
+    }
+  
+    private sendHello(privateKey: string, sessionId: string) {
+      this.send({
+        type: 'auth',
+        sessionId: sessionId,
+        privateKey: privateKey
+      });
+    }
+  
+    private send(message: { type: string, [key: string]: any }) {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify(message));
+      } else {
+        this.messageQueue.push(JSON.stringify(message));
+      }
+    }
+  
+    private startHeartbeat() {
+      this.stopHeartbeat();
+      this.heartbeatInterval = window.setInterval(() => {
+        this.send({ type: 'heartbeat', status: 'ping' });
+      }, 30000);
+    }
+  
+    private stopHeartbeat() {
+      if (this.heartbeatInterval) {
+        window.clearInterval(this.heartbeatInterval);
+        this.heartbeatInterval = null;
+      }
+    }
+  
+    private processMessageQueue() {
+      while (this.messageQueue.length > 0) {
+        this.send(JSON.parse(this.messageQueue.shift()!));
+      }
+    }
+  
+    async executeCommand(command: string, timeout: number = 60000): Promise<{ stdout: string, stderr: string, exitCode: number }> {
+      return new Promise((resolve, reject) => {
+        const commandId = `cmd_${Math.random()}`;
+        this.send({ type: 'execute', command, commandId });
+  
+        const handler = (event: MessageEvent) => {
+          const message = JSON.parse(event.data);
+          if (message.commandId === commandId) {
+            if (message.type === 'command_result') {
+              this.ws?.removeEventListener('message', handler);
+              clearTimeout(commandTimeout);
+              resolve({ stdout: message.stdout, stderr: message.stderr, exitCode: message.exitCode });
             }
           }
-        } catch (error) {
-          console.error('Failed to parse command response:', error);
-        }
-      };
-
-      this.websocket.addEventListener('message', messageHandler);
-
-      // 发送命令执行请求
-      this.websocket.send(JSON.stringify({
-        type: 'execute_command',
-        commandId,
-        command
-      }));
-
-      // 设置超时
-      setTimeout(() => {
-        this.websocket?.removeEventListener('message', messageHandler);
-        reject(new Error('命令执行超时'));
-      }, 30000);
-    });
-  }
-
-  disconnect() {
-    if (this.websocket) {
-      this.websocket.close();
-      this.websocket = null;
+        };
+  
+        const commandTimeout = setTimeout(() => {
+          this.ws?.removeEventListener('message', handler);
+          reject(new Error(`Command timed out after ${timeout}ms`));
+        }, timeout);
+  
+        this.ws?.addEventListener('message', handler);
+      });
     }
-  }
+
+    sendInterrupt() {
+        this.send({ type: 'interrupt' });
+    }
+
+    async uploadFile(file: File, remotePath: string): Promise<void> {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const fileData = (event.target?.result as ArrayBuffer);
+                const a = new Uint8Array(fileData);
+                this.send({
+                    type: 'sftp_upload',
+                    path: remotePath,
+                    data: Array.from(a),
+                });
+                resolve();
+            };
+            reader.onerror = (error) => reject(error);
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
+    async downloadFile(remotePath: string): Promise<void> {
+        const commandId = `sftp_dl_${Math.random()}`;
+        this.send({ type: 'sftp_download', path: remotePath, commandId });
+
+        return new Promise((resolve, reject) => {
+            const handler = (event: MessageEvent) => {
+                const message = JSON.parse(event.data);
+                if (message.commandId === commandId && message.type === 'sftp_download_chunk') {
+                    const blob = new Blob([new Uint8Array(message.data)], { type: 'application/octet-stream' });
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = remotePath.split('/').pop() || 'download';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(url);
+                    this.ws?.removeEventListener('message', handler);
+                    resolve();
+                } else if (message.commandId === commandId && message.type === 'error') {
+                    this.ws?.removeEventListener('message', handler);
+                    reject(new Error(message.message));
+                }
+            };
+            this.ws?.addEventListener('message', handler);
+        });
+    }
 }
 
-class AutoDeploymentManager {
+class ProactiveDeploymentManager {
   private terminal: Terminal;
-  private sshClient: SSHWebSocketClient;
+  private sshClient: EnhancedSSHWebSocketClient;
   private deploymentSteps: DeploymentStep[] = [];
-  private currentStep = 0;
+  private healthCheckSteps: DeploymentStep[] = [];
   private isDeploying = false;
+  private isMonitoring = false;
+  private monitoringInterval: number | null = null;
+  private aiAnalyst: AIAnalystService;
+  private aiFixAttempted: { [stepId: string]: boolean } = {};
 
-  constructor(terminal: Terminal, sshClient: SSHWebSocketClient) {
+  constructor(terminal: Terminal, sshClient: EnhancedSSHWebSocketClient) {
     this.terminal = terminal;
     this.sshClient = sshClient;
+    this.aiAnalyst = new AIAnalystService();
   }
 
-  async startDeployment(config: {
-    githubUrl: string;
-    projectType: string;
-    deploymentPath?: string;
-  }) {
+  async startDeployment(config: DeploymentConfig) {
     if (this.isDeploying) {
-      this.terminal.write('\r\n⚠️ 部署正在进行中...\r\n');
+      this.terminal.write('\r\n⚠️ 部署正在进行中，请等待完成\r\n');
       return;
     }
 
     this.isDeploying = true;
-    this.currentStep = 0;
-
+    this.stopMonitoring();
+    this.aiFixAttempted = {}; // Reset AI fix attempts for new deployment
+    
     try {
-      this.terminal.write('\r\n🚀 开始自动化部署...\r\n');
-      
-      // 生成部署步骤
+      this.terminal.write('\r\n🚀 开始自动化部署流程\r\n');
       this.deploymentSteps = await this.generateDeploymentSteps(config);
-      
-      // 执行部署步骤
-      for (let i = 0; i < this.deploymentSteps.length; i++) {
-        this.currentStep = i;
-        const step = this.deploymentSteps[i];
-        
-        this.terminal.write(`\r\n📋 步骤 ${i + 1}/${this.deploymentSteps.length}: ${step.description}\r\n`);
-        
+      this.terminal.write('📋 部署计划:\r\n');
+      this.deploymentSteps.forEach((step, index) => {
+        this.terminal.write(`  ${index + 1}. ${step.description}\r\n`);
+      });
+
+      let deploymentSucceeded = true;
+      for (const step of this.deploymentSteps) {
+        this.terminal.write(`\r\n🔄 ${step.description}\r\n`);
         try {
           await this.executeStep(step);
-          this.terminal.write(`✅ 步骤 ${i + 1} 完成\r\n`);
+          this.terminal.write(`\r\n✅ 步骤 '${step.description}' 成功\r\n`);
         } catch (error) {
-          this.terminal.write(`❌ 步骤 ${i + 1} 失败: ${error.message}\r\n`);
-          await this.handleStepError(error, step);
+          this.terminal.write(`\r\n❌ 步骤 '${step.description}' 失败\r\n`);
+          const canRetry = await this.handleStepError(error as Error, step, config);
+          if (canRetry) {
+            this.terminal.write(`\r\n🔄 重试步骤 '${step.description}'...\r\n`);
+            try {
+              await this.executeStep(step);
+              this.terminal.write(`\r\n✅ 步骤 '${step.description}' 重试成功\r\n`);
+            } catch (retryError) {
+              this.terminal.write(`\r\n💥 重试失败，部署中止。\r\n`);
+              deploymentSucceeded = false;
+              break;
+            }
+          } else {
+            deploymentSucceeded = false;
+            break;
+          }
         }
       }
 
-      this.terminal.write('\r\n🎉 部署完成!\r\n');
-      
+      if (deploymentSucceeded) {
+        this.terminal.write('\r\n🎉 部署流程完成！\r\n');
+        this.startMonitoring(config);
+      }
     } catch (error) {
-      this.terminal.write(`\r\n❌ 部署失败: ${error.message}\r\n`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.terminal.write(`\r\n💥 部署失败: ${errorMessage}\r\n`);
     } finally {
       this.isDeploying = false;
     }
   }
 
-  private async generateDeploymentSteps(config: {
-    githubUrl: string;
-    projectType: string;
-    deploymentPath?: string;
-  }): Promise<DeploymentStep[]> {
-    const deployPath = config.deploymentPath || '/home/ec2-user/deployment';
-    const projectName = this.extractProjectName(config.githubUrl);
+  startMonitoring(config: DeploymentConfig) {
+    if (this.isMonitoring) return;
+    this.healthCheckSteps = this.generateHealthCheckSteps(config);
+    if (this.healthCheckSteps.length === 0) return;
 
-    const baseSteps: DeploymentStep[] = [
-      {
-        id: 'prepare',
-        command: `mkdir -p ${deployPath} && cd ${deployPath}`,
-        description: '准备部署目录'
-      },
-      {
-        id: 'clone',
-        command: `git clone ${config.githubUrl} ${projectName}`,
-        description: '克隆项目代码'
-      },
-      {
-        id: 'enter_project',
-        command: `cd ${deployPath}/${projectName}`,
-        description: '进入项目目录'
+    this.isMonitoring = true;
+    this.terminal.write(`\r\n\r\n✅ 启动持续健康监控 (每60秒一次)...\r\n`);
+
+    this.monitoringInterval = window.setInterval(async () => {
+      try {
+        await this.performHealthCheck();
+      } catch (error) {
+        this.stopMonitoring();
+        await this.analyzeAndRecover(error as Error, config);
       }
-    ];
-
-    // 根据项目类型添加特定步骤
-    const projectSteps = this.getProjectSpecificSteps(config.projectType);
-    
-    return [...baseSteps, ...projectSteps];
+    }, 60000);
   }
 
-  private getProjectSpecificSteps(projectType: string): DeploymentStep[] {
+  stopMonitoring() {
+    if (this.monitoringInterval) {
+      window.clearInterval(this.monitoringInterval);
+      this.monitoringInterval = null;
+    }
+    if (this.isMonitoring) {
+      this.isMonitoring = false;
+      this.terminal.write('\r\n🛑 监控已停止。\r\n');
+    }
+  }
+
+  private async performHealthCheck(): Promise<void> {
+    for (const step of this.healthCheckSteps) {
+      this.terminal.write(`   - ${step.description}... `);
+      const result = await this.sshClient.executeCommand(step.command, step.timeout);
+      const success = result.exitCode === 0 && (!step.successPattern || new RegExp(step.successPattern).test(result.stdout));
+      if (!success) {
+        this.terminal.write('❌ FAILED\r\n');
+        throw new Error(`'${step.description}' 失败. 输出: ${result.stdout || result.stderr}`);
+      }
+      this.terminal.write('✅ OK\r\n');
+    }
+  }
+
+  private async analyzeAndRecover(error: Error, config: DeploymentConfig) {
+    this.terminal.write(`\r\n🔍 分析故障并尝试恢复...\r\n`);
+    const restartStep = this.getProjectSpecificSteps(config.projectType).find(step => step.id === 'start_service');
+    if (restartStep) {
+      try {
+        await this.sshClient.executeCommand(restartStep.command, restartStep.timeout);
+        this.startMonitoring(config);
+      } catch (restartError) {
+        this.terminal.write(`\r\n❌ 恢复失败: ${restartError instanceof Error ? restartError.message : String(restartError)}\r\n`);
+      }
+    }
+  }
+  
+  private async executeStep(step: DeploymentStep): Promise<void> {
+    const result = await this.sshClient.executeCommand(step.command, step.timeout);
+    this.terminal.write(result.stdout);
+    this.terminal.write(result.stderr);
+    if (result.exitCode !== 0) throw new Error(result.stderr || result.stdout);
+  }
+
+  private async handleStepError(error: Error, step: DeploymentStep, config: DeploymentConfig): Promise<boolean> {
+    this.terminal.write(`\r\n🔍 错误分析: ${error.message}\r\n`);
+
+    // First, try simple, hard-coded fixes
+    if (error.message.toLowerCase().includes('permission denied') && !step.command.toLowerCase().includes('sudo')) {
+      this.terminal.write('💡 检测到权限问题，自动尝试使用 sudo\r\n');
+      step.command = `sudo ${step.command}`;
+      return true; // Indicate that the step should be retried
+    }
+
+    // If simple fixes fail or don't apply, consult the AI (but only once per step)
+    if (!this.aiFixAttempted[step.id]) {
+      this.terminal.write('\r\n🤖 简单修复无效，正在向AI大模型请求解决方案...\r\n');
+      this.aiFixAttempted[step.id] = true;
+
+      const [stdout, stderr] = this.splitOutput(error.message);
+      
+      const context: AIAnalystContext = {
+        failedCommand: step.command,
+        stdout: stdout,
+        stderr: stderr,
+        projectType: config.projectType,
+      };
+
+      const suggestion = await this.aiAnalyst.getFixSuggestion(context);
+
+      if (suggestion.suggestedCommand) {
+        this.terminal.write(`\r\n🧠 AI 建议: ${suggestion.explanation}\r\n`);
+        this.terminal.write(`   > ${suggestion.suggestedCommand}\r\n`);
+        this.terminal.write('\r\n🔧 正在尝试执行AI的建议...\r\n');
+        
+        try {
+          // Execute the AI's suggested command
+          await this.executeStep({
+            id: `${step.id}_fix`,
+            command: suggestion.suggestedCommand,
+            description: "执行AI修复命令"
+          });
+          this.terminal.write('\r\n✅ AI建议的命令执行成功。\r\n');
+          // After successful fix, the original step should be retried.
+          return true;
+        } catch (fixError) {
+          const errorMessage = fixError instanceof Error ? fixError.message : String(fixError);
+          this.terminal.write(`\r\n❌ AI建议的命令执行失败: ${errorMessage}\r\n`);
+          this.terminal.write('   部署中止。\r\n');
+          return false; // AI fix failed, do not retry the original step.
+        }
+      } else {
+        this.terminal.write('\r\n🤷 AI无法提供解决方案，部署中止。\r\n');
+        return false;
+      }
+    }
+
+    this.terminal.write('\r\n💥 自动修复失败，部署中止。\r\n');
+    return false; // Do not retry
+  }
+  
+  private splitOutput(output: string): [string, string] {
+    // This is a simple way to split combined output. A real implementation might need a more robust method.
+    const stdoutLines: string[] = [];
+    const stderrLines: string[] = [];
+    output.split('\n').forEach(line => {
+        if (line.toLowerCase().includes('error') || line.toLowerCase().includes('fail')) {
+            stderrLines.push(line);
+        } else {
+            stdoutLines.push(line);
+        }
+    });
+    return [stdoutLines.join('\n'), stderrLines.join('\n')];
+  }
+
+  private extractProjectName = (githubUrl: string): string => {
+    return githubUrl.substring(githubUrl.lastIndexOf('/') + 1).replace('.git', '');
+  };
+
+  private getProjectSpecificSteps = (projectType: string): DeploymentStep[] => {
     switch (projectType.toLowerCase()) {
       case 'react':
       case 'vue':
       case 'angular':
         return [
-          {
-            id: 'install_node',
-            command: 'curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash - && sudo yum install -y nodejs',
-            description: '安装 Node.js'
-          },
-          {
-            id: 'install_deps',
-            command: 'npm install',
-            description: '安装项目依赖'
-          },
-          {
-            id: 'build',
-            command: 'npm run build',
-            description: '构建项目'
-          },
-          {
-            id: 'start',
-            command: 'npm start',
-            description: '启动应用'
-          }
+          { id: 'install_deps', command: 'npm install', description: '安装项目依赖' },
+          { id: 'build_project', command: 'npm run build', description: '构建前端项目' },
+          { id: 'start_service', command: 'pm2 serve build 3000 --spa', description: '使用PM2启动服务' }
         ];
-      
-      case 'python':
-        return [
-          {
-            id: 'install_python',
-            command: 'sudo yum install -y python3 python3-pip',
-            description: '安装 Python'
-          },
-          {
-            id: 'install_deps',
-            command: 'pip3 install -r requirements.txt',
-            description: '安装 Python 依赖'
-          },
-          {
-            id: 'start',
-            command: 'python3 app.py',
-            description: '启动 Python 应用'
-          }
-        ];
-      
       default:
-        return [
-          {
-            id: 'detect',
-            command: 'ls -la && file *',
-            description: '检测项目结构'
-          }
-        ];
+        return [];
     }
   }
 
-  private async executeStep(step: DeploymentStep): Promise<void> {
-    try {
-      const result = await this.sshClient.executeCommand(step.command);
-      
-      if (result.exitCode !== 0) {
-        throw new Error(`命令执行失败，退出码: ${result.exitCode}`);
-      }
-      
-      return;
-    } catch (error) {
-      // 重试逻辑
-      if (step.retryCount && step.retryCount > 0) {
-        this.terminal.write(`🔄 重试步骤: ${step.description}\r\n`);
-        step.retryCount--;
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        return this.executeStep(step);
-      }
-      
-      throw error;
-    }
+  private generateDeploymentSteps = async (config: DeploymentConfig): Promise<DeploymentStep[]> => {
+    const projectName = this.extractProjectName(config.githubUrl);
+    const deploymentPath = config.deploymentPath || `~/deployments/${projectName}`;
+    const baseSteps: DeploymentStep[] = [
+      { id: 'create_dir', command: `mkdir -p ${deploymentPath}`, description: '创建部署目录' },
+      { id: 'clone_repo', command: `git clone ${config.githubUrl} ${deploymentPath} || (cd ${deploymentPath} && git pull)`, description: '克隆或更新代码' },
+    ];
+    const projectSteps = this.getProjectSpecificSteps(config.projectType);
+    return baseSteps.map(s => ({...s, command: `cd ${deploymentPath} && ${s.command}`})).concat(projectSteps);
   }
 
-  private async handleStepError(error: Error, step: DeploymentStep) {
-    this.terminal.write(`\r\n🔍 分析错误...\r\n`);
-    
-    // 这里可以集成 AI 错误分析
-    const errorAnalysis = await this.analyzeError(error.message, step);
-    
-    if (errorAnalysis.canAutoFix) {
-      this.terminal.write(`🔧 尝试自动修复...\r\n`);
-      try {
-        await this.sshClient.executeCommand(errorAnalysis.fixCommand);
-        this.terminal.write(`✅ 自动修复成功\r\n`);
-        // 重试原步骤
-        await this.executeStep(step);
-      } catch (fixError) {
-        this.terminal.write(`❌ 自动修复失败: ${fixError.message}\r\n`);
-      }
+  private generateHealthCheckSteps = (config: DeploymentConfig): DeploymentStep[] => {
+    const projectName = this.extractProjectName(config.githubUrl);
+    switch (config.projectType.toLowerCase()) {
+      case 'react':
+      case 'vue':
+      case 'angular':
+        return [{
+            id: 'health_check_pm2',
+            description: `检查 '${projectName}' 进程是否在线`,
+            command: `pm2 describe ${projectName} || pm2 describe app`,
+            successPattern: 'online',
+        }];
+      default: return [];
     }
-  }
-
-  private async analyzeError(errorMessage: string, step: DeploymentStep): Promise<{
-    canAutoFix: boolean;
-    fixCommand?: string;
-    suggestion?: string;
-  }> {
-    // 简单的错误分析逻辑，可以扩展为 AI 分析
-    if (errorMessage.includes('permission denied')) {
-      return {
-        canAutoFix: true,
-        fixCommand: `sudo chmod +x ${step.command.split(' ')[0]}`,
-        suggestion: '权限不足，尝试添加执行权限'
-      };
-    }
-    
-    if (errorMessage.includes('command not found')) {
-      return {
-        canAutoFix: false,
-        suggestion: '命令未找到，请检查是否已安装相关软件'
-      };
-    }
-    
-    return {
-      canAutoFix: false,
-      suggestion: '未知错误，请手动检查'
-    };
-  }
-
-  private extractProjectName(githubUrl: string): string {
-    const match = githubUrl.match(/\/([^\/]+)\.git$/);
-    return match ? match[1] : 'project';
   }
 }
 
-const SSHTerminal: React.FC<SSHTerminalProps> = ({
-  sshConfig,
-  onConnect,
-  onError,
-  onOutput,
-  className = ''
-}) => {
+const customTheme: ITheme = {
+  background: '#1e1e1e',
+  foreground: '#d4d4d4',
+  cursor: '#ffffff',
+  selectionBackground: '#ffffff',
+  selectionForeground: '#000000',
+  black: '#000000', red: '#cd3131', green: '#0dbc79', yellow: '#e5e510',
+  blue: '#2472c8', magenta: '#bc3fbc', cyan: '#11a8cd', white: '#ffffff',
+  brightBlack: '#808080', brightRed: '#f44747', brightGreen: '#23d18b',
+  brightYellow: '#f5f543', brightBlue: '#3b8eea', brightMagenta: '#d670d6',
+  brightCyan: '#29b8db', brightWhite: '#ffffff'
+};
+
+const SSHTerminal: React.FC<SSHTerminalProps> = ({ onOutput, onConnect, onError }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
-  const [terminal, setTerminal] = useState<Terminal | null>(null);
-  const [sshClient, setSSHClient] = useState<SSHWebSocketClient | null>(null);
-  const [deploymentManager, setDeploymentManager] = useState<AutoDeploymentManager | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
+  const [sshClient, setSSHClient] = useState<EnhancedSSHWebSocketClient | null>(null);
+  const [deploymentManager, setDeploymentManager] = useState<ProactiveDeploymentManager | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
 
-  // 初始化终端
+  // State for UI controls
+  const [privateKey, setPrivateKey] = useState('');
+  const [githubUrl, setGithubUrl] = useState('');
+  const [projectType, setProjectType] = useState('react');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [downloadPath, setDownloadPath] = useState('');
+
   useEffect(() => {
-    if (!terminalRef.current) return;
-
-    const term = new Terminal({
-      theme: {
-        background: '#1e1e1e',
-        foreground: '#d4d4d4',
-        cursor: '#ffffff',
-        selection: '#3a3d41',
-        black: '#000000',
-        red: '#cd3131',
-        green: '#0dbc79',
-        yellow: '#e5e510',
-        blue: '#2472c8',
-        magenta: '#bc3fbc',
-        cyan: '#11a8cd',
-        white: '#e5e5e5',
-        brightBlack: '#666666',
-        brightRed: '#f14c4c',
-        brightGreen: '#23d18b',
-        brightYellow: '#f5f543',
-        brightBlue: '#3b8eea',
-        brightMagenta: '#d670d6',
-        brightCyan: '#29b8db',
-        brightWhite: '#e5e5e5'
-      },
-      fontSize: 14,
-      fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
-      cursorBlink: true,
-      rows: 30,
-      cols: 100
-    });
-
-    // 添加插件
-    const fitAddon = new FitAddon();
-    const webLinksAddon = new WebLinksAddon();
-    const searchAddon = new SearchAddon();
-    const clipboardAddon = new ClipboardAddon();
-
-    term.loadAddon(fitAddon);
-    term.loadAddon(webLinksAddon);
-    term.loadAddon(searchAddon);
-    term.loadAddon(clipboardAddon);
-
-    // 尝试加载 WebGL 插件
-    try {
-      const webglAddon = new WebglAddon();
-      term.loadAddon(webglAddon);
-    } catch (error) {
-      console.warn('WebGL addon not available:', error);
-    }
-
-    term.open(terminalRef.current);
-    fitAddon.fit();
-
-    // 监听窗口大小变化
-    const handleResize = () => {
+    if (terminalRef.current) {
+      const term = new Terminal({ theme: customTheme, fontSize: 14 });
+      const fitAddon = new FitAddon();
+      term.loadAddon(fitAddon);
+      term.open(terminalRef.current);
       fitAddon.fit();
-    };
-    window.addEventListener('resize', handleResize);
 
-    // 监听终端输出
-    term.onData((data) => {
-      onOutput?.(data);
-    });
+      const client = new EnhancedSSHWebSocketClient(term);
+      const manager = new ProactiveDeploymentManager(term, client);
+      setSSHClient(client);
+      setDeploymentManager(manager);
 
-    // 创建 SSH 客户端和部署管理器
-    const client = new SSHWebSocketClient(term);
-    const manager = new AutoDeploymentManager(term, client);
+      term.onData((data: string) => {
+        client.onData(data);
+        onOutput?.(data);
+      });
 
-    setTerminal(term);
-    setSSHClient(client);
-    setDeploymentManager(manager);
+      term.onResize((size: { cols: number, rows: number }) => client.onResize(size));
+      term.focus();
 
-    // 显示欢迎信息
-    term.write('🚀 GitAgent SSH 终端已就绪\r\n');
-    term.write('💡 使用说明:\r\n');
-    term.write('   - 配置 SSH 连接信息后点击连接\r\n');
-    term.write('   - 连接成功后可以开始自动化部署\r\n');
-    term.write('   - 支持智能错误检测和自动修复\r\n\r\n');
-
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      client.disconnect();
-      term.dispose();
-    };
+      return () => {
+        client.disconnect();
+        term.dispose();
+      };
+    }
   }, [onOutput]);
 
-  // SSH 连接
-  const connectSSH = useCallback(async (config: SSHConfig) => {
-    if (!sshClient) {
-      onError?.('SSH 客户端未初始化');
-      return;
+  const handleConnect = async () => {
+    if (sshClient && privateKey) {
+      setConnectionStatus('connecting');
+      try {
+        await sshClient.connect(
+          `ws://${window.location.hostname}:3000/ssh`,
+          privateKey,
+          `session-${Date.now()}`
+        );
+        setConnectionStatus('connected');
+        onConnect?.();
+      } catch (error) {
+        setConnectionStatus('disconnected');
+        onError?.(error instanceof Error ? error.message : String(error));
+      }
+    } else {
+      onError?.('SSH Client not initialized or Private Key is missing.');
     }
+  };
 
-    try {
-      await sshClient.connect(
-        config,
-        (connected) => {
-          setIsConnected(connected);
-          onConnect?.(connected);
-        },
-        (error) => {
-          onError?.(error);
-        }
-      );
-    } catch (error) {
-      onError?.(error.message);
+  const handleStartDeployment = () => {
+    if (deploymentManager && githubUrl) {
+      const config: DeploymentConfig = {
+        githubUrl: githubUrl,
+        projectType: projectType,
+      };
+      deploymentManager.startDeployment(config);
+    } else {
+       onError?.('Deployment Manager not initialized or GitHub URL is missing.');
     }
-  }, [sshClient, onConnect, onError]);
+  };
 
-  // 开始部署
-  const startDeployment = useCallback(async (config: {
-    githubUrl: string;
-    projectType: string;
-  }) => {
-    if (!deploymentManager) {
-      onError?.('部署管理器未初始化');
-      return;
+  const handleSftpUpload = async () => {
+    if (uploadFile && sshClient) {
+        sshClient.uploadFile(uploadFile, `/home/ec2-user/upload/${uploadFile.name}`);
     }
+  };
 
-    if (!isConnected) {
-      onError?.('请先连接 SSH');
-      return;
+  const handleSftpDownload = async () => {
+    if (downloadPath && sshClient) {
+      sshClient.downloadFile(downloadPath);
     }
+  };
+  
+  const interruptCommand = () => {
+    sshClient?.sendInterrupt();
+  };
 
-    await deploymentManager.startDeployment(config);
-  }, [deploymentManager, isConnected, onError]);
+  const controlStyles: React.CSSProperties = {
+    padding: '10px',
+    backgroundColor: '#252526',
+    borderBottom: '1px solid #333',
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '15px',
+    alignItems: 'center',
+  };
 
-  // 自动连接
-  useEffect(() => {
-    if (sshConfig && sshClient && !isConnected) {
-      connectSSH(sshConfig);
-    }
-  }, [sshConfig, sshClient, isConnected, connectSSH]);
+  const inputStyles: React.CSSProperties = {
+    padding: '8px',
+    border: '1px solid #3c3c3c',
+    backgroundColor: '#3c3c3c',
+    color: '#d4d4d4',
+    borderRadius: '4px',
+  };
+  
+  const buttonStyles: React.CSSProperties = {
+    padding: '8px 15px',
+    border: 'none',
+    backgroundColor: '#0e639c',
+    color: 'white',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    transition: 'background-color 0.2s',
+  };
+
+  const sectionStyles: React.CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '5px',
+  };
+
+  const labelStyles: React.CSSProperties = {
+    fontSize: '12px',
+    color: '#a0a0a0',
+  };
 
   return (
-    <div className={`ssh-terminal ${className}`}>
-      <div 
-        ref={terminalRef} 
-        className="terminal-container"
-        style={{
-          width: '100%',
-          height: '400px',
-          backgroundColor: '#1e1e1e',
-          border: '1px solid #333',
-          borderRadius: '4px',
-          padding: '8px'
-        }}
-      />
+    <div>
+      <div style={controlStyles}>
+        {/* Connection Section */}
+        <div style={sectionStyles}>
+          <label style={labelStyles}>SSH Private Key</label>
+          <textarea 
+            value={privateKey}
+            onChange={(e) => setPrivateKey(e.target.value)}
+            placeholder="-----BEGIN RSA PRIVATE KEY-----"
+            rows={2}
+            style={{...inputStyles, width: '200px', height: '35px'}}
+          />
+          <button onClick={handleConnect} style={buttonStyles} disabled={connectionStatus === 'connecting'}>
+            {connectionStatus === 'connecting' ? 'Connecting...' : 'Connect'}
+          </button>
+        </div>
+
+        {/* Deployment Section */}
+        <div style={sectionStyles}>
+          <label style={labelStyles}>GitHub URL</label>
+          <input 
+            type="text"
+            value={githubUrl}
+            onChange={(e) => setGithubUrl(e.target.value)}
+            placeholder="https://github.com/user/repo.git"
+            style={inputStyles}
+          />
+          <select value={projectType} onChange={(e) => setProjectType(e.target.value)} style={inputStyles}>
+            <option value="react">React</option>
+            <option value="vue">Vue</option>
+            <option value="angular">Angular</option>
+            <option value="python">Python</option>
+          </select>
+          <button onClick={handleStartDeployment} style={buttonStyles}>Deploy</button>
+        </div>
+
+        {/* SFTP Upload Section */}
+        <div style={sectionStyles}>
+          <label style={labelStyles}>SFTP Upload</label>
+          <input type="file" onChange={(e) => setUploadFile(e.target.files ? e.target.files[0] : null)} style={inputStyles} />
+          <button onClick={handleSftpUpload} style={buttonStyles}>Upload</button>
+        </div>
+
+        {/* SFTP Download Section */}
+        <div style={sectionStyles}>
+          <label style={labelStyles}>SFTP Download Path</label>
+          <input 
+            type="text"
+            value={downloadPath}
+            onChange={(e) => setDownloadPath(e.target.value)}
+            placeholder="/home/user/file.txt"
+            style={inputStyles}
+          />
+          <button onClick={handleSftpDownload} style={buttonStyles}>Download</button>
+        </div>
+         <div style={sectionStyles}>
+          <label style={labelStyles}>Actions</label>
+          <button onClick={interruptCommand} style={{...buttonStyles, backgroundColor: '#c72c41'}}>Interrupt (Ctrl+C)</button>
+        </div>
+
+      </div>
+      <div ref={terminalRef} style={{ height: 'calc(100vh - 150px)', width: '100%' }} />
     </div>
   );
 };
 
-export default SSHTerminal;
-export { SSHWebSocketClient, AutoDeploymentManager };
-export type { SSHConfig, SSHTerminalProps }; 
+export default SSHTerminal; 
