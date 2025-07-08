@@ -185,27 +185,59 @@ export class EnhancedDeploymentService {
       timestamp: new Date(),
       level: 'info',
       message: '🔑 处理SSH密钥文件',
-      details: `文件名: ${sshKeyFile.name}`,
+      details: `文件名: ${sshKeyFile.name}, 大小: ${sshKeyFile.size} bytes`,
       agentName: 'KeyProcessor'
     });
 
-    // 在实际应用中，这里需要将文件保存到临时位置
-    // 由于浏览器限制，这里只是模拟
-    const tempKeyPath = `/tmp/ssh_key_${Date.now()}`;
-    
-    // 这里应该实现文件保存逻辑
-    // 例如：使用File API读取内容，然后通过API保存到服务器
-    
-    onLog({
-      id: Date.now().toString(),
-      timestamp: new Date(),
-      level: 'warning',
-      message: '⚠️ SSH密钥处理模拟',
-      details: '实际部署时需要实现文件上传和保存功能',
-      agentName: 'KeyProcessor'
-    });
+    try {
+      // 读取文件内容
+      const keyContent = await sshKeyFile.text();
+      
+      // 验证密钥格式
+      if (!keyContent.includes('-----BEGIN') || !keyContent.includes('-----END')) {
+        throw new Error('无效的SSH密钥格式');
+      }
 
-    return tempKeyPath;
+      // 通过API将密钥保存到服务器临时位置
+      const response = await fetch('/api/ssh/save-key', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          keyContent,
+          filename: sshKeyFile.name
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`密钥保存失败: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      const tempKeyPath = result.keyPath;
+
+      onLog({
+        id: Date.now().toString(),
+        timestamp: new Date(),
+        level: 'success',
+        message: '✅ SSH密钥文件处理完成',
+        details: `临时路径: ${tempKeyPath}`,
+        agentName: 'KeyProcessor'
+      });
+
+      return tempKeyPath;
+    } catch (error) {
+      onLog({
+        id: Date.now().toString(),
+        timestamp: new Date(),
+        level: 'error',
+        message: '❌ SSH密钥处理失败',
+        details: error instanceof Error ? error.message : '未知错误',
+        agentName: 'KeyProcessor'
+      });
+      throw error;
+    }
   }
 
   /**

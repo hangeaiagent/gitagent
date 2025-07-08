@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Bot, Github, Server, Zap, RefreshCw, Terminal as TerminalIcon } from 'lucide-react';
+import { Bot, Github, Zap, RefreshCw, Terminal as TerminalIcon } from 'lucide-react';
 import FileUpload from './components/FileUpload';
 import DeploymentProgress from './components/DeploymentProgress';
 import DeploymentLogs from './components/DeploymentLogs';
@@ -9,6 +9,7 @@ import AgentStatus from './components/AgentStatus';
 import UserPromptModal from './components/UserPromptModal';
 import ErrorAnalysisModal from './components/ErrorAnalysisModal';
 import SSHTerminal from './components/SSHTerminal';
+import LogViewer from './components/LogViewer';
 import { useDeployment } from './hooks/useDeployment';
 import { DeploymentConfig, ServerConfig } from './types/deployment';
 import type { SSHConfig } from './components/SSHTerminal';
@@ -438,6 +439,41 @@ function App() {
                       summary={deploymentStatus.summary}
                       onViewLogs={() => {}}
                       onDeployAgain={handleTraditionalDeploy}
+                    />
+                  )}
+                </>
+              )}
+
+              {/* Real Deployment UI */}
+              {deploymentMode === 'real' && (
+                <>
+                  <DeploymentProgress 
+                    status={deploymentStatus}
+                    onRetry={handleRetryDeployment}
+                    onReset={resetDeployment}
+                  />
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <AgentStatus 
+                      agents={deploymentStatus.activeAgents}
+                      currentAgent={deploymentStatus.currentAgent}
+                    />
+                    
+                    <DeploymentLogs logs={deploymentStatus.logs} />
+                  </div>
+
+                  {/* Enhanced Log Viewer for Real Deployment */}
+                  <LogViewer 
+                    isActive={isDeploying}
+                    showCategories={['ssh_execution', 'connection', 'deployment']}
+                    maxHeight="500px"
+                  />
+
+                  {deploymentStatus.summary && (
+                    <DeploymentSummary 
+                      summary={deploymentStatus.summary}
+                      onViewLogs={() => {}}
+                      onDeployAgain={handleRealDeploy}
                     />
                   )}
                 </>

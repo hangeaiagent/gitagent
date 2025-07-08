@@ -1,8 +1,5 @@
-import { DeploymentConfig, DeploymentLog, ExecutionResult, CommandExecution } from '../types/deployment';
-import { spawn, exec } from 'child_process';
-import { promisify } from 'util';
-
-const execAsync = promisify(exec);
+import { DeploymentLog, ExecutionResult, CommandExecution } from '../types/deployment';
+import { logSSH } from './loggerService';
 
 export interface SSHConfig {
   host: string;
@@ -193,7 +190,7 @@ export class RealExecutionEngine {
   }
 
   /**
-   * 通过SSH执行命令
+   * 通过SSH执行命令 (使用SSH代理服务器)
    */
   private async executeSSHCommand(
     command: string,
@@ -203,55 +200,83 @@ export class RealExecutionEngine {
     const workingDir = options.workingDirectory || '~';
     const sudoPrefix = options.sudo ? 'sudo ' : '';
     
-    // 构建SSH命令
-    let sshCommand = `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10`;
-    
-    if (this.sshConfig.keyPath) {
-      sshCommand += ` -i "${this.sshConfig.keyPath}"`;
-    }
-    
-    sshCommand += ` -p ${this.sshConfig.port} ${this.sshConfig.username}@${this.sshConfig.host}`;
-    
-    // 添加工作目录和环境变量
-    let remoteCommand = `cd ${workingDir} && `;
-    
-    if (options.environment) {
-      const envVars = Object.entries(options.environment)
-        .map(([key, value]) => `export ${key}="${value}"`)
-        .join(' && ');
-      remoteCommand += `${envVars} && `;
-    }
-    
-    remoteCommand += `${sudoPrefix}${command}`;
-    
-    const fullCommand = `${sshCommand} "${remoteCommand}"`;
-    
     const startTime = Date.now();
 
     try {
-      const { stdout, stderr } = await execAsync(fullCommand, {
-        timeout,
-        encoding: 'utf8'
+      // 构建要执行的远程命令
+      let remoteCommand = `cd ${workingDir}`;
+      
+      if (options.environment) {
+        const envVars = Object.entries(options.environment)
+          .map(([key, value]) => `export ${key}="${value}"`)
+          .join(' && ');
+        remoteCommand += ` && ${envVars}`;
+      }
+      
+      remoteCommand += ` && ${sudoPrefix}${command}`;
+
+      // 通过SSH代理服务器执行命令
+      const response = await fetch('http://localhost:3000/api/ssh/execute', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          config: {
+            host: this.sshConfig.host,
+            port: this.sshConfig.port,
+            username: this.sshConfig.username,
+            sshKey: this.sshConfig.privateKey,
+            keyPath: this.sshConfig.keyPath
+          },
+          command: remoteCommand,
+          timeout
+        }),
+        signal: AbortSignal.timeout(timeout)
       });
 
+      if (!response.ok) {
+        throw new Error(`SSH API请求失败: ${response.statusText}`);
+      }
+
+      const result = await response.json();
       const executionTime = Date.now() - startTime;
-      
+
+      // 记录SSH执行日志
+      logSSH(command, {
+        success: result.success,
+        stdout: result.stdout || '',
+        stderr: result.stderr || '',
+        exitCode: result.exitCode || (result.success ? 0 : 1),
+        executionTime
+      }, this.sshConfig.host, this.sshConfig.username);
+
       return {
-        success: true,
-        stdout: stdout.trim(),
-        stderr: stderr.trim(),
-        exitCode: 0,
+        success: result.success,
+        stdout: result.stdout || '',
+        stderr: result.stderr || '',
+        exitCode: result.exitCode || (result.success ? 0 : 1),
         executionTime,
         command
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       const executionTime = Date.now() - startTime;
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      
+      // 记录SSH执行失败日志
+      logSSH(command, {
+        success: false,
+        stdout: '',
+        stderr: errorMessage,
+        exitCode: -1,
+        executionTime
+      }, this.sshConfig.host, this.sshConfig.username);
       
       return {
         success: false,
-        stdout: error.stdout || '',
-        stderr: error.stderr || error.message,
-        exitCode: error.code || -1,
+        stdout: '',
+        stderr: errorMessage,
+        exitCode: -1,
         executionTime,
         command
       };

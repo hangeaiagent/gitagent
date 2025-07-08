@@ -12,7 +12,7 @@ interface ClaudeRequest {
 
 export class ClaudeService {
   private apiKey: string;
-  private baseUrl = 'https://api.anthropic.com/v1/messages';
+  private baseUrl = '/anthropic-api/v1/messages';
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
